@@ -19,7 +19,7 @@ def _rows(df: pd.DataFrame) -> list:
     return [tuple(_to_native(v) for v in r) for r in df.itertuples(index=False, name=None)]
 
 
-def read_sql_df(engine: Engine, sql: str) -> pd.DataFrame:
+def read_sql_df(engine: Engine, sql: str, params: tuple | None = None) -> pd.DataFrame:
     """Runs a read-only query via a raw psycopg2 cursor rather than
     pandas.read_sql(engine, ...): pandas' SQLAlchemy-engine detection is
     version-sensitive and raises "'Engine' object has no attribute
@@ -27,7 +27,7 @@ def read_sql_df(engine: Engine, sql: str) -> pd.DataFrame:
     conn = engine.raw_connection()
     try:
         cur = conn.cursor()
-        cur.execute(sql)
+        cur.execute(sql, params)
         columns = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
     finally:
