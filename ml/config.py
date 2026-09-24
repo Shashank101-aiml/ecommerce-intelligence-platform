@@ -17,3 +17,6 @@ LABEL_COLUMN = "churned"
 MODEL_NAME = "churn-model"
 MODEL_ALIAS = "champion"
 EXPERIMENT_NAME = "churn-prediction"
+
+# Types skops must trust when (de)serialising models we trained ourselves.
+SKOPS_TRUSTED_TYPES = ["sklearn.tree._tree.Tree"]
