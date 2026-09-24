@@ -89,3 +89,28 @@ Currency: the source dataset is entirely GBP; `unit_price` is standardized to 2 
 
 - **`marts.sales_mart`** — one row per `fact_sales` line, denormalized with date/product/geography attributes.
 - **`marts.customer_mart`** — one row per customer, denormalized with their latest retention snapshot.
+
+## Part 2 tables (`warehouse` schema, `src/db/schema/05_ml_tables.sql`)
+
+### `warehouse.ml_customer_features`
+One row per customer per cutoff date; features use only purchases on or before `cutoff_date`.
+| Column | Type | Notes |
+|---|---|---|
+| customer_key, cutoff_date | PK | |
+| recency_days, tenure_days | INTEGER | days since last / first purchase, as of the cutoff |
+| frequency | INTEGER | orders to date |
+| monetary, avg_order_value | NUMERIC | total revenue, revenue per order |
+| avg_days_between_orders | NUMERIC | 0 for single-order customers |
+| orders_30d/60d/90d, revenue_30d/60d/90d | INTEGER / NUMERIC | activity in the window before the cutoff |
+| distinct_products | INTEGER | |
+| is_uk | SMALLINT | 1 if the customer bought from the UK |
+| churned | SMALLINT | 1 = no purchase in the 90 days after the cutoff; NULL for unlabelled scoring rows |
+
+### `warehouse.prediction_log`
+One row per API prediction: `requested_at`, `customer_key` (NULL for raw-feature calls), `model_version`, `features` (JSONB), `churn_probability`, `predicted_label`, `latency_ms`, `status` (`ok` / `error`), `error`.
+
+### `warehouse.customer_churn_scores`
+Batch scores, PK (`customer_key`, `as_of_date`): `churn_probability`, `predicted_label`, `risk_tier` (`High` ≥ 0.70, `Medium` ≥ 0.40, else `Low`), `model_version`, `scored_at`.
+
+### `warehouse.monitoring_metrics`
+One row per monitoring check: `measured_at`, `metric_name` (`psi`, `null_rate`, `out_of_range_rate`, `precision`, `recall`, `recall_drop`, `error_rate`, `latency_p50_ms`, `latency_p95_ms`), `feature_name` (NULL for non-feature metrics), `metric_value`, `threshold`, `breached`.

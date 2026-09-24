@@ -1,8 +1,8 @@
 # E-Commerce Sales Analytics & Customer Churn Prediction
 
-**Project Report — Part 1: Data Pipeline Implementation**
+**Project Report — Part 1: Data Pipeline · Part 2: MLOps Extension**
 
-Course: Data Engineering and MLOps | Individual Project | Part 1 Submission
+Course: Data Engineering and MLOps | Individual Project
 
 ---
 
@@ -10,7 +10,7 @@ Course: Data Engineering and MLOps | Individual Project | Part 1 Submission
 
 Online retailers generate transaction-level data that, on its own, is too raw to support business decisions. This project builds an analytics platform that consolidates online retail transactions, customer details, and product information into a form that can answer two kinds of questions: *what is happening to sales* (revenue trends, top products, geographic mix) and *what is happening to customers* (who is buying repeatedly, who has gone quiet, who is at risk of churning).
 
-The project is split into two parts. **Part 1**, covered by this report, builds the foundation: a reliable retail ETL pipeline, a dimensional data warehouse, and an interactive business dashboard. **Part 2**, to follow, extends the same warehouse with a churn/repeat-purchase prediction model operationalized through MLOps practices (MLflow tracking, a FastAPI prediction service, Docker packaging, and drift monitoring).
+The project is split into two parts. **Part 1** (sections 1–10) builds the foundation: a reliable retail ETL pipeline, a dimensional data warehouse, and an interactive business dashboard. **Part 2** (sections 11–18) extends the same warehouse with a churn prediction model operationalized through MLOps practices: MLflow tracking and registry, a FastAPI prediction service, Docker packaging, drift monitoring and a retraining policy.
 
 Concretely, Part 1 set out to:
 
@@ -58,7 +58,7 @@ marts.sales_mart / marts.customer_mart  ──►  Streamlit dashboard
 
 Every step from ingestion through RFM computation runs as a task in a single Airflow DAG (`ecommerce_etl_dag`), so the layered flow above is also the literal task graph a grader can see execute in the Airflow UI.
 
-**Runtime.** PostgreSQL and Airflow run via Docker Compose ([`docker-compose.yml`](../docker-compose.yml)) so the whole backend starts with one command and is identical on any machine. The Streamlit dashboard runs directly with Python against the same Postgres instance, which keeps the interactive-dashboard iteration loop fast and matches the brief's suggestion to reach for Streamlit "when interactive filtering, user input, or future model prediction is central to the application" — relevant here because Part 2's live churn predictions will plug into this same dashboard process.
+**Runtime.** PostgreSQL and Airflow run via Docker Compose ([`docker-compose.yml`](../docker-compose.yml)) so the whole backend starts with one command and is identical on any machine. The Streamlit dashboard runs directly with Python against the same Postgres instance, which keeps the interactive-dashboard iteration loop fast and matches the brief's suggestion to reach for Streamlit "when interactive filtering, user input, or future model prediction is central to the application" — relevant here because Part 2's live churn predictions are integrated into this same dashboard (which, from Part 2 onwards, is also packaged as a container).
 
 ## 4. Data Ingestion
 
@@ -168,20 +168,96 @@ Three issues were caught and fixed during this verification rather than glossed 
 
 *[Insert screenshots/logs: `docker compose ps` showing healthy containers; `airflow dags list-runs` showing two successful runs; terminal output of the row-count verification queries — see `docs/screenshots/`.]*
 
-## 10. Setup & Reproducibility
+## 10. Setup & Reproducibility (Parts 1 and 2)
 
-Full setup and run instructions — prerequisites, `docker compose up`, triggering the DAG, running the dashboard, and running the pipeline steps locally without Airflow — are in [`README.md`](../README.md). In summary: `docker compose up -d` brings up Postgres (port 5433, remapped from the default 5432 to avoid clashing with any locally installed Postgres) and Airflow (UI on port 8080, `admin`/`admin`); the DAG is unpaused and triggered once; `streamlit run dashboard/app.py` serves the dashboard on port 8501.
+Full setup and run instructions — prerequisites, `docker compose up`, triggering the DAGs, running the dashboard, the Part 2 ML commands and the tests — are in [`README.md`](../README.md). In summary: `docker compose up -d` brings up Postgres (port 5433, remapped from the default 5432 to avoid clashing with any locally installed Postgres) and Airflow (UI on port 8080, `admin`/`admin`); the DAG is unpaused and triggered once; `streamlit run dashboard/app.py` serves the dashboard on port 8501.
 
-## 11. Part 2 Preview
+# Part 2 — MLOps Extension
 
-Part 2 will extend this same warehouse with a churn/repeat-purchase model, using folder scaffolding already in place so no restructuring is needed when that work begins:
+## 11. Overview and Objectives
 
-- **Churn definition**: an inactivity-window rule built on `recency_days` from `warehouse.fact_customer_retention` (e.g., no purchase within N days of the observation date).
-- **Features**: `ml/features/build_features.py` will extend the existing RFM features with tenure and category-mix signals, using a chronological train/validation/test split.
-- **Modeling**: Logistic Regression, Random Forest, and XGBoost candidates, trained and compared in `ml/training/train_model.py`.
-- **Tracking & registry**: MLflow (`ml/mlflow_tracking/`) for experiments, parameters, metrics, and the registered model version.
-- **Serving**: a FastAPI prediction endpoint (`api/main.py`), containerized via `api/Dockerfile`, with its output integrated back into the Streamlit dashboard.
-- **Monitoring**: `ml/monitoring/drift_monitor.py` for input-feature drift and served-model precision/recall over time, with retraining criteria to be documented as part of that submission.
+Part 2 turns the Part 1 warehouse into an operational churn-prediction system. The objectives, taken from the brief, were to define churn with a clear inactivity window; train Logistic Regression, Random Forest and XGBoost models on a chronological split; track experiments with MLflow; register and version the best model; serve it through a FastAPI service; containerise the API and dashboard; integrate predictions into the dashboard; monitor input data, drift, performance, latency and failures; and define retraining criteria and the model lifecycle (see [`docs/model_lifecycle.md`](model_lifecycle.md)). The updated architecture, including the MLOps layer, is in [`docs/architecture_diagram.md`](architecture_diagram.md).
+
+## 12. Churn Definition and Feature Engineering
+
+**Definition.** A customer churns at a cutoff date if they had purchased on or before it and make no purchase in the following **90 days**. Guest checkouts have no customer identity and are excluded.
+
+**Avoiding leakage.** The existing Part 1 RFM features snapshot *after* the last purchase date, so they have no future to be labelled against and would leak if reused. Part 2 builds features **point-in-time**: for each cutoff, features use only purchases on or before it and the label uses only the 90 days after it ([`ml/features/build_features.py`](../ml/features/build_features.py)). Tests prove that adding later purchases never changes a cutoff's features and that a label window running past the end of the data is rejected.
+
+**Features (14):** recency, frequency, monetary value, tenure, average order value, average days between orders, orders and revenue in the last 30/60/90 days, distinct products, and a UK flag. They are stored per customer per cutoff in `warehouse.ml_customer_features`.
+
+**Chronological split** (the model is always tested on the future relative to its training data):
+
+| Split | Cutoffs | Rows | Churn rate |
+|---|---|---:|---:|
+| Train | 2011-03-01, 2011-04-01 | 3,853 | 43.6% / 46.1% |
+| Validation | 2011-06-09 | 2,800 | 52.3% |
+| Test | 2011-09-09 | 3,370 | 43.1% |
+
+## 13. Model Development and Evaluation
+
+Three families were trained over small grids (Logistic Regression with scaling, Random Forest, XGBoost), with fixed seeds. The best configuration of each, on the validation split:
+
+| Model | Precision | Recall | F1 | ROC-AUC | PR-AUC |
+|---|---:|---:|---:|---:|---:|
+| **Random Forest** (300 trees, depth 12) | 0.707 | 0.702 | 0.704 | 0.751 | **0.729** |
+| XGBoost | 0.721 | 0.675 | 0.697 | 0.757 | 0.723 |
+| Logistic Regression | 0.699 | 0.721 | 0.710 | 0.748 | 0.716 |
+
+The model was selected on validation PR-AUC, then evaluated **once** on the untouched test split: **precision 0.599, recall 0.710, F1 0.650, ROC-AUC 0.722, PR-AUC 0.619**.
+
+**Interpretation.** These are moderate, realistic results for a 90-day churn problem on twelve months of retail data, and they should not be read as a strong predictor:
+
+- The three model families are within 0.013 PR-AUC of each other, so the choice of Random Forest is narrow.
+- The forest overfits (train F1 0.88 versus validation 0.70).
+- Precision dropped from 0.71 (validation) to 0.60 (test) while recall held. The churn base rate fell from 52% to 43% between the two periods, which lowers precision by itself. With only four labelled cutoffs, the validation and test windows are single dates, so the metrics carry real sampling noise.
+- The most influential features are monetary value (0.14), 90-day revenue (0.12), average order value (0.10) and distinct products (0.10).
+
+Sanity checks on real customers agree with intuition: a top-spending, recently active customer scores 0.3% churn risk, and a customer with a single purchase in January scores 76%.
+
+## 14. MLflow Tracking, Registry and Versioning
+
+An MLflow server runs in Docker (port 5000) with a PostgreSQL backend store and an artifact volume. Every training execution logs, per run, its parameters, train and validation metrics, a confusion matrix and feature importance, nested under a `model-selection` parent run that also holds the test metrics and the training cutoffs. The selected model is logged with an input/output signature and registered as **`churn-model`**; the alias **`champion`** marks the production version. Consumers load `models:/churn-model@champion`, so promoting a new version needs no code change. Two versions are registered (v1, v2); retraining on identical data produced identical metrics, which demonstrates reproducibility.
+
+*[Insert screenshots: MLflow experiment run table with the three model families; the `churn-model` registry page showing the champion alias — see `docs/screenshots/`.]*
+
+## 15. Prediction API and Docker Deployment
+
+The FastAPI service ([`api/main.py`](../api/main.py)) exposes `GET /health`, `POST /predict` (14 validated features) and `POST /predict/customer/{id}` (features built from the warehouse as of the latest data date). Every request is written to `warehouse.prediction_log` with its features, probability, latency and status; a logging failure never breaks a prediction.
+
+Verified behaviour with real requests: a valid payload returns HTTP 200; missing, negative, unknown or out-of-range fields return 422; an unknown customer returns 404; a SQL-injection-style customer id returns 404 (ids are bound parameters, never concatenated); a missing model returns 503 and a scoring failure returns 500 and is logged. Average serving latency was about 270 ms with no errors.
+
+The API and the dashboard each have a pinned Dockerfile and a service in `docker-compose.yml`, alongside Postgres, MLflow and Airflow, so one `docker compose up -d` starts the whole system. The containerised API loaded champion v2 through MLflow and returned exactly the same probability (0.7644) as the same customer scored from the host environment, confirming the training and serving environments agree.
+
+*[Insert screenshot: API Swagger page at `http://localhost:8000/docs` and a successful `/predict/customer/12346` response.]*
+
+## 16. Monitoring and Retraining
+
+Monitoring ([`ml/monitoring/drift_monitor.py`](../ml/monitoring/drift_monitor.py)) stores every check in `warehouse.monitoring_metrics`: input data quality (null and out-of-range rates), feature drift (Population Stability Index against the data the champion was trained on), model precision and recall against the champion's recorded test recall, and serving error rate and p50/p95 latency from the prediction log.
+
+**Retraining criteria** (`ml/monitoring/retraining.py`): retrain if at least 2 features have PSI above 0.20, or recall falls more than 0.10 below baseline, or the serving error rate exceeds 2%. A **guard** defers retraining unless labelled cutoffs newer than the champion's training data exist; retraining on the same data would only recreate the same model and would loop forever while drift persists. When new data exists, the train/validation/test windows roll forward and the drift reference moves with them.
+
+**What monitoring found.** On the current data 7 of 14 features exceed the PSI threshold (largest: tenure 2.28, recency 0.69, 90-day orders 0.66). The drift is genuine and explained: cumulative features grow as the data window grows, and the model trained on customers with 1–4 months of history now scores customers with up to 12. The policy therefore recommends retraining, and the pipeline correctly defers it because the data ends on 2011-12-09, so no labelled cutoff newer than the one already used for testing exists. A simulated-drift mode (`--simulate-drift`) exercises the breach path (9 of 14 features breach), and unit tests cover the decision rules.
+
+## 17. Dashboard Integration
+
+A **Churn Risk** page was added to the Streamlit dashboard. It shows API and champion-model status, the latest monitoring breaches (7 of 35 checks), the customers-by-risk-tier chart (High 901, Medium 1,695, Low 1,742), the churn-probability distribution, risk tiers within each RFM segment, the highest-value customers at high risk (£314,128 of revenue sits in the high-risk tier), and a live single-customer lookup that calls the containerised API. Batch scores come from `ml/scoring/score_customers.py`, which writes `warehouse.customer_churn_scores` and runs as the last task of the ML DAG.
+
+*[Insert screenshots: the Churn Risk page (KPIs and charts) and a live customer lookup — see `docs/screenshots/`.]*
+
+## 18. Part 2 Execution Evidence
+
+The ML pipeline runs as the Airflow DAG `ml_pipeline_dag`: `build_features → monitor → decide_retraining → (retrain_model | skip_retraining) → score_customers` (weekly, paused by default, `max_active_runs=1`). It was run end to end in Airflow with every task successful, and the Part 1 `ecommerce_etl_dag` was re-run afterwards on the rebuilt Airflow image and reproduced the identical warehouse (519,599 fact rows, £10,588,919.89 revenue). The automated test suite has 33 tests (Part 1 and Part 2) and all pass.
+
+Problems found and fixed during verification, rather than assumed away:
+
+- MLflow's emoji run URLs crashed the Windows console; output is now forced to UTF-8.
+- MLflow's safe model serialisation rejected the random forest; only scikit-learn's `Tree` type is trusted, not everything.
+- The Airflow image was on Python 3.11, which cannot install the XGBoost version the model was trained with; it now uses the Python 3.12 Airflow build with pinned versions, and pandas was aligned so `pip check` passes cleanly.
+- The Airflow image was missing `skops`, so the first ML DAG run failed at the monitor task; it was added and the DAG re-run successfully.
+- Retraining originally had no notion of "new data", so drift would have triggered an endless loop of identical retrains; the new-data guard and rolling windows fixed this.
+
+*[Insert screenshots: Airflow `ml_pipeline_dag` graph with all tasks green; `docker compose ps` showing all services healthy.]*
 
 ## Appendix: Data Dictionary
 
@@ -192,3 +268,4 @@ See [`docs/data_dictionary.md`](data_dictionary.md) for the full source-column r
 - **Warehouse**: 519,599 fact rows, 4,338 customers, 3,921 products, 38 countries, £10,588,919.89 total revenue.
 - **RFM segments**: Champions 1,675 · At Risk 1,000 · Loyal 858 · Lost 805.
 - **Top countries by revenue**: United Kingdom (£8.96M), Netherlands (£285K), EIRE (£281K), Germany (£228K), France (£210K).
+- **Part 2**: 4 labelled cutoffs, 14 point-in-time features; champion Random Forest test F1 0.650 (precision 0.599, recall 0.710, ROC-AUC 0.722); 4,338 customers scored (901 High / 1,695 Medium / 1,742 Low risk); 7 of 14 features flagged for drift, retraining deferred for lack of newer labelled data.
