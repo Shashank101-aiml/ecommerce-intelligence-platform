@@ -1,0 +1,10 @@
+.venv
+.git
+data
+logs
+airflow/logs
+docs
+tests
+**/__pycache__
+.env
+mlruns

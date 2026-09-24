@@ -42,3 +42,15 @@ CREATE TABLE IF NOT EXISTS warehouse.monitoring_metrics (
     threshold      DOUBLE PRECISION,
     breached       BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+-- Batch churn scores (one row per customer per scoring date), read by the dashboard.
+CREATE TABLE IF NOT EXISTS warehouse.customer_churn_scores (
+    customer_key       INTEGER NOT NULL REFERENCES warehouse.dim_customer(customer_key),
+    as_of_date         DATE NOT NULL,
+    churn_probability  DOUBLE PRECISION NOT NULL,
+    predicted_label    SMALLINT NOT NULL,
+    risk_tier          TEXT NOT NULL,
+    model_version      TEXT NOT NULL,
+    scored_at          TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (customer_key, as_of_date)
+);

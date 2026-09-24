@@ -30,3 +30,7 @@ LATENCY_P95_THRESHOLD_MS = 1000.0
 NULL_RATE_THRESHOLD = 0.05
 MIN_SERVING_SAMPLES = 30         # below this, drift is measured on the latest labelled snapshot
 MONITOR_WINDOW_DAYS = 30
+
+# Risk tiers for the dashboard (probability of churn within CHURN_WINDOW_DAYS)
+HIGH_RISK_THRESHOLD = 0.7
+MEDIUM_RISK_THRESHOLD = 0.4
