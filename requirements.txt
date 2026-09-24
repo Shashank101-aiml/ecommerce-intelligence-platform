@@ -7,3 +7,10 @@ requests==2.34.2
 streamlit==1.63.0
 plotly==7.0.0
 pytest==9.1.1
+scikit-learn==1.9.1
+xgboost==3.4.1
+mlflow==3.16.1
+matplotlib==3.11.2
+fastapi==0.141.1
+uvicorn==0.52.4
+httpx==0.28.1
