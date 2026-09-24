@@ -20,3 +20,13 @@ EXPERIMENT_NAME = "churn-prediction"
 
 # Types skops must trust when (de)serialising models we trained ourselves.
 SKOPS_TRUSTED_TYPES = ["sklearn.tree._tree.Tree"]
+
+# Monitoring / retraining thresholds
+PSI_THRESHOLD = 0.2              # >0.2 is a conventional "significant shift"
+PSI_FEATURES_BREACH_MIN = 2      # retrain if at least this many features drift
+RECALL_DROP_THRESHOLD = 0.10     # absolute drop vs the champion's recorded test recall
+ERROR_RATE_THRESHOLD = 0.02
+LATENCY_P95_THRESHOLD_MS = 1000.0
+NULL_RATE_THRESHOLD = 0.05
+MIN_SERVING_SAMPLES = 30         # below this, drift is measured on the latest labelled snapshot
+MONITOR_WINDOW_DAYS = 30

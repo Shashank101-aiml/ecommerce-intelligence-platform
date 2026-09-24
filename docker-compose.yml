@@ -1,5 +1,6 @@
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.9.3-python3.11
+  build: ./docker/airflow
+  image: ecommerce-airflow:local
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
@@ -7,15 +8,13 @@ x-airflow-common: &airflow-common
     PYTHONPATH: /opt/airflow/project
     DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/ecommerce
     UCI_ONLINE_RETAIL_URL: "https://archive.ics.uci.edu/ml/machine-learning-databases/00352/Online%20Retail.xlsx"
-    # Dev-only convenience: installs the project's non-Airflow deps into the
-    # official image at container start. Fine for a coursework project;
-    # a pinned custom image would replace this in a production setup.
-    _PIP_ADDITIONAL_REQUIREMENTS: "pandas==2.2.2 openpyxl==3.1.5 requests==2.32.3"
+    MLFLOW_TRACKING_URI: http://mlflow:5000
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/plugins:/opt/airflow/plugins
     - ./src:/opt/airflow/project/src
+    - ./ml:/opt/airflow/project/ml
     - ./data:/opt/airflow/project/data
     - ./logs:/opt/airflow/project/logs
   depends_on:

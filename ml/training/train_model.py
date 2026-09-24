@@ -88,10 +88,13 @@ def log_artifacts(model, X, y, prefix: str):
             mlflow.log_artifact(str(csv))
 
 
-def run() -> dict:
+def run(train_cutoffs=None, validation_cutoffs=None, test_cutoffs=None) -> dict:
+    train_cutoffs = train_cutoffs or TRAIN_CUTOFFS
+    validation_cutoffs = validation_cutoffs or VALIDATION_CUTOFFS
+    test_cutoffs = test_cutoffs or TEST_CUTOFFS
     uri = configure_mlflow()
     engine = get_engine()
-    train, val, test = (load_split(engine, c) for c in (TRAIN_CUTOFFS, VALIDATION_CUTOFFS, TEST_CUTOFFS))
+    train, val, test = (load_split(engine, c) for c in (train_cutoffs, validation_cutoffs, test_cutoffs))
     X_tr, y_tr = train[FEATURE_COLUMNS], train[LABEL_COLUMN].astype(int)
     X_va, y_va = val[FEATURE_COLUMNS], val[LABEL_COLUMN].astype(int)
     X_te, y_te = test[FEATURE_COLUMNS], test[LABEL_COLUMN].astype(int)
@@ -99,8 +102,10 @@ def run() -> dict:
 
     best = None
     with mlflow.start_run(run_name="model-selection"):
-        mlflow.log_params({"train_cutoffs": str(TRAIN_CUTOFFS), "validation_cutoffs": str(VALIDATION_CUTOFFS),
-                           "test_cutoffs": str(TEST_CUTOFFS)})
+        iso = lambda cs: ",".join(str(c) for c in cs)  # noqa: E731
+        mlflow.log_params({"train_cutoffs": iso(train_cutoffs), "validation_cutoffs": iso(validation_cutoffs),
+                           "test_cutoffs": iso(test_cutoffs),
+                           "data_max_cutoff": str(max([*train_cutoffs, *validation_cutoffs, *test_cutoffs]))})
         for family, params, factory in model_grid():
             with mlflow.start_run(run_name=f"{family}", nested=True):
                 model = factory(params).fit(X_tr, y_tr)
